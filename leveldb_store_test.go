@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/golang/leveldb"
-	"github.com/hashicorp/raft"
+	"github.com/tidwall/raft"
 )
 
 func testLevelDBStoreLow(t testing.TB) *LevelDBStore {
@@ -71,7 +71,7 @@ func TestNewLevelDBStore(t *testing.T) {
 
 	// Ensure the file was created
 	if store.path != fh {
-		t.Fatalf("unexpected file path %q", store)
+		t.Fatalf("unexpected file path %v", store)
 	}
 	if _, err := os.Stat(fh); err != nil {
 		t.Fatalf("err: %s", err)

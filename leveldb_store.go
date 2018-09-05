@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/hashicorp/raft"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/opt"
+	"github.com/tidwall/raft"
 )
 
 const (
@@ -22,7 +22,7 @@ var (
 	dbLogs = []byte("logs")
 	dbConf = []byte("conf")
 
-	// An error indicating a given key does not exist
+	// ErrKeyNotFound indicates a given key does not exist
 	ErrKeyNotFound = errors.New("not found")
 )
 
@@ -41,8 +41,10 @@ type LevelDBStore struct {
 	wo *opt.WriteOptions
 }
 
+// Level is the consistency level
 type Level int
 
+// Low, Medium, or High level
 const (
 	Low    Level = -1
 	Medium Level = 0
