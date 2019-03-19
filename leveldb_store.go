@@ -3,12 +3,11 @@ package raftleveldb
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 
+	"github.com/hashicorp/raft"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/opt"
-	"github.com/tidwall/raft"
 )
 
 const (
@@ -204,31 +203,6 @@ func (b *LevelDBStore) GetUint64(key []byte) (uint64, error) {
 		return 0, err
 	}
 	return bytesToUint64(val), nil
-}
-
-// Peers returns raft peers
-func (b *LevelDBStore) Peers() ([]string, error) {
-	var peers []string
-	val, err := b.Get([]byte("peers"))
-	if err != nil {
-		if err == ErrKeyNotFound {
-			return []string{}, nil
-		}
-		return nil, err
-	}
-	if err := json.Unmarshal(val, &peers); err != nil {
-		return nil, err
-	}
-	return peers, nil
-}
-
-// SetPeers sets raft peers
-func (b *LevelDBStore) SetPeers(peers []string) error {
-	data, err := json.Marshal(peers)
-	if err != nil {
-		return err
-	}
-	return b.Set([]byte("peers"), data)
 }
 
 func bcopy(b []byte) []byte {

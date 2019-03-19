@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/golang/leveldb"
-	"github.com/tidwall/raft"
+	"github.com/hashicorp/raft"
+	"github.com/syndtr/goleveldb/leveldb"
 )
 
 func testLevelDBStoreLow(t testing.TB) *LevelDBStore {
@@ -50,9 +50,6 @@ func TestLevelDBStore_Implements(t *testing.T) {
 	if _, ok := store.(raft.LogStore); !ok {
 		t.Fatalf("LevelDBStore does not implement raft.LogStore")
 	}
-	if _, ok := store.(raft.PeerStore); !ok {
-		t.Fatalf("LevelDBStore does not implement raft.PeerStore")
-	}
 }
 
 func TestNewLevelDBStore(t *testing.T) {
@@ -83,39 +80,12 @@ func TestNewLevelDBStore(t *testing.T) {
 	}
 
 	// Ensure our tables were created
-	db, err := leveldb.Open(fh, nil)
+	db, err := leveldb.OpenFile(fh, nil)
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
 	defer db.Close()
 
-}
-
-func TestLevelDBStore_Peers(t *testing.T) {
-	store := testLevelDBStoreHigh(t)
-	defer store.Close()
-	defer os.Remove(store.path)
-	peers, err := store.Peers()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(peers) != 0 {
-		t.Fatalf("expected '%v', got '%v'", 0, len(peers))
-	}
-	v := []string{"1", "2", "3"}
-	if err := store.SetPeers(v); err != nil {
-		t.Fatal(err)
-	}
-	peers, err = store.Peers()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(peers) != 3 {
-		t.Fatalf("expected '%v', got '%v'", 3, len(peers))
-	}
-	if peers[0] != "1" || peers[1] != "2" || peers[2] != "3" {
-		t.Fatalf("expected %v, got %v", v, peers)
-	}
 }
 
 func TestLevelDBStore_FirstIndex(t *testing.T) {
