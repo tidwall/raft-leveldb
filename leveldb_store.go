@@ -61,6 +61,7 @@ func NewLevelDBStore(path string, durability Level) (*LevelDBStore, error) {
 		opts.NoSync = false
 		wo.Sync = true
 	}
+	opts.OpenFilesCacheCapacity = 50
 	// Try to connect
 	db, err := leveldb.OpenFile(path, &opts)
 	if err != nil {
