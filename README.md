@@ -1,5 +1,3 @@
-**This project is deprecated. Please see the [tidwall/raft-wal](https://github.com/tidwall/raft-wal) project for a more advanced raft log.**
-
 raft-leveldb
 ============
 
