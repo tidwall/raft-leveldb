@@ -57,9 +57,7 @@ const (
 // NewLevelDBStore takes a file path and returns a connected Raft backend.
 func NewLevelDBStore(path string, durability Level) (*LevelDBStore, error) {
 	var opts opt.Options
-	opts.OpenFilesCacheCapacity = 50
-	opts.Compression = opt.NoCompression
-	opts.NoSync = false
+	opts.OpenFilesCacheCapacity = 20
 
 	// Try to connect
 	db, err := leveldb.OpenFile(path, &opts)
