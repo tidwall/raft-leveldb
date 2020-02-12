@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"sync"
 
 	"github.com/hashicorp/raft"
 	"github.com/syndtr/goleveldb/leveldb"
@@ -13,7 +14,8 @@ import (
 const (
 	// Permissions to use on the db file. This is only used if the
 	// database file does not exist and needs to be created.
-	dbFileMode = 0600
+	dbFileMode   = 0600
+	maxBatchSize = 1024 * 1024
 )
 
 var (
@@ -31,13 +33,12 @@ var errInvalidLog = errors.New("invalid log")
 // log entries. It also provides key/value storage, and can be used as
 // a LogStore and StableStore.
 type LevelDBStore struct {
-	// db is the underlying handle to the db.
-	db *leveldb.DB
-
-	// The path to the Bolt database file
-	path string
-
-	wo *opt.WriteOptions
+	mu    sync.RWMutex
+	db    *leveldb.DB // db is the underlying handle to the db.
+	path  string      // The path to the Bolt database file
+	dur   Level
+	batch leveldb.Batch
+	bsize int
 }
 
 // Level is the consistency level
@@ -52,16 +53,11 @@ const (
 
 // NewLevelDBStore takes a file path and returns a connected Raft backend.
 func NewLevelDBStore(path string, durability Level) (*LevelDBStore, error) {
-	var wo opt.WriteOptions
 	var opts opt.Options
-	if durability <= Low {
-		opts.NoSync = true
-		wo.Sync = false
-	} else {
-		opts.NoSync = false
-		wo.Sync = true
-	}
 	opts.OpenFilesCacheCapacity = 50
+	//opts.Compression = opt.NoCompression
+	opts.NoSync = durability < High
+
 	// Try to connect
 	db, err := leveldb.OpenFile(path, &opts)
 	if err != nil {
@@ -72,19 +68,28 @@ func NewLevelDBStore(path string, durability Level) (*LevelDBStore, error) {
 	store := &LevelDBStore{
 		db:   db,
 		path: path,
-		wo:   &wo,
+		dur:  durability,
 	}
-
 	return store, nil
 }
 
 // Close is used to gracefully close the DB connection.
 func (b *LevelDBStore) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := b.flush(true); err != nil {
+		return err
+	}
 	return b.db.Close()
 }
 
 // FirstIndex returns the first known index from the Raft log.
 func (b *LevelDBStore) FirstIndex() (uint64, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if err := b.flush(false); err != nil {
+		return 0, err
+	}
 	var n uint64
 	iter := b.db.NewIterator(nil, nil)
 	for ok := iter.Seek(dbLogs); ok; ok = iter.Next() {
@@ -106,6 +111,11 @@ func (b *LevelDBStore) FirstIndex() (uint64, error) {
 
 // LastIndex returns the last known index from the Raft log.
 func (b *LevelDBStore) LastIndex() (uint64, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if err := b.flush(false); err != nil {
+		return 0, err
+	}
 	var n uint64
 	iter := b.db.NewIterator(nil, nil)
 	for ok := iter.Last(); ok; ok = iter.Prev() {
@@ -124,8 +134,27 @@ func (b *LevelDBStore) LastIndex() (uint64, error) {
 	return n, nil
 }
 
+func (b *LevelDBStore) flush(sync bool) error {
+	if b.bsize == 0 {
+		return nil
+	}
+	var opt opt.WriteOptions
+	opt.Sync = sync
+	if err := b.db.Write(&b.batch, &opt); err != nil {
+		return err
+	}
+	b.batch.Reset()
+	b.bsize = 0
+	return nil
+}
+
 // GetLog is used to retrieve a log from BoltDB at a given index.
 func (b *LevelDBStore) GetLog(idx uint64, log *raft.Log) error {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if err := b.flush(false); err != nil {
+		return err
+	}
 	key := append(dbLogs, uint64ToBytes(idx)...)
 	val, err := b.db.Get(key, nil)
 	if err != nil {
@@ -144,16 +173,35 @@ func (b *LevelDBStore) StoreLog(log *raft.Log) error {
 
 // StoreLogs is used to store a set of raft logs
 func (b *LevelDBStore) StoreLogs(logs []*raft.Log) error {
-	var batch leveldb.Batch
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	for _, log := range logs {
 		key := append(dbLogs, uint64ToBytes(log.Index)...)
-		batch.Put(key, encodeLog(log))
+		val := encodeLog(log)
+		if b.dur >= High {
+			if err := b.db.Put(key, val, nil); err != nil {
+				return err
+			}
+		} else {
+			b.batch.Put(key, val)
+			b.bsize += len(key) + len(val)
+		}
 	}
-	return b.db.Write(&batch, b.wo)
+	if b.bsize > maxBatchSize || b.dur == Medium {
+		if err := b.flush(false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DeleteRange is used to delete logs within a given range inclusively.
 func (b *LevelDBStore) DeleteRange(min, max uint64) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := b.flush(false); err != nil {
+		return err
+	}
 	var batch leveldb.Batch
 	prefix := append(dbLogs, uint64ToBytes(min)...)
 	iter := b.db.NewIterator(nil, nil)
@@ -172,16 +220,38 @@ func (b *LevelDBStore) DeleteRange(min, max uint64) error {
 	if err != nil {
 		return err
 	}
-	return b.db.Write(&batch, b.wo)
+	return b.db.Write(&batch, nil)
 }
 
 // Set is used to set a key/value set outside of the raft log
 func (b *LevelDBStore) Set(k, v []byte) error {
-	return b.db.Put(append(dbConf, k...), v, b.wo)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	key := append(dbConf, k...)
+	val := v
+	if b.dur >= High {
+		if err := b.db.Put(key, val, nil); err != nil {
+			return err
+		}
+	} else {
+		b.batch.Put(key, val)
+		b.bsize += len(key) + len(val)
+		if b.bsize > maxBatchSize || b.dur >= Medium {
+			if err := b.flush(false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // Get is used to retrieve a value from the k/v store by key
 func (b *LevelDBStore) Get(k []byte) ([]byte, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if err := b.flush(false); err != nil {
+		return nil, err
+	}
 	val, err := b.db.Get(append(dbConf, k...), nil)
 	if err != nil {
 		if err == leveldb.ErrNotFound {

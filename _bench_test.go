@@ -3,8 +3,6 @@ package raftleveldb
 import (
 	"os"
 	"testing"
-
-	"github.com/tidwall/raft/bench"
 )
 
 func BenchmarkLevelDBStore_FirstIndex(b *testing.B) {
