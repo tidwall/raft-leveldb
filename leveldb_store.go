@@ -117,17 +117,23 @@ const (
 func (b *LevelDBStore) batchFlush(kind flushKind) error {
 	var opt opt.WriteOptions
 	opt.Sync = b.dur >= High || kind == flushSync
+	var requireWrite bool
 	switch kind {
 	case flushSync:
 		if b.dur < High && b.bsize == 0 {
 			// add a __sync__ key to force the sync to the leveldb journal
 			b.batchPut([]byte("__sync__"), nil)
 		}
+		requireWrite = true
+	case flushBeforeRead:
+		requireWrite = true
+	default:
+		requireWrite = b.bsize > maxBatchSize || b.dur >= Medium
 	}
 	if b.bsize == 0 {
 		return nil // nothing to flush
 	}
-	if b.bsize > maxBatchSize || opt.Sync || b.dur >= Medium {
+	if requireWrite {
 		if err := b.db.Write(&b.batch, &opt); err != nil {
 			return err
 		}
