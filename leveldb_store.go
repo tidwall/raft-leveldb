@@ -267,6 +267,9 @@ func (b *LevelDBStore) DeleteRange(min, max uint64) error {
 		return ErrClosed
 	}
 	prefix := append(dbLogs, uint64ToBytes(min)...)
+	if err := b.batchFlush(flushBeforeRead); err != nil {
+		return err
+	}
 	iter := b.db.NewIterator(nil, nil)
 	for ok := iter.Seek(prefix); ok; ok = iter.Next() {
 		key := iter.Key()
