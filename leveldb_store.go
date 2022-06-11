@@ -42,6 +42,7 @@ type LevelDBStore struct {
 	batch  leveldb.Batch
 	bsize  int
 	closed bool
+	sbuf   []byte // reusable buffers for StoreLog
 }
 
 // Level is the consistency level
@@ -249,12 +250,18 @@ func (b *LevelDBStore) StoreLogs(logs []*raft.Log) error {
 		return ErrClosed
 	}
 	for _, log := range logs {
-		key := append(dbLogs, uint64ToBytes(log.Index)...)
-		val := encodeLog(log)
+		b.sbuf = append(b.sbuf[:0], dbLogs...)
+		b.sbuf = appendUint64(b.sbuf, log.Index)
+		key := b.sbuf
+		b.sbuf = appendEncodeLog(b.sbuf, log)
+		val := b.sbuf[len(key):]
 		b.batchPut(key, val)
 	}
 	if err := b.batchFlush(flushAfterWrite); err != nil {
 		return err
+	}
+	if cap(b.sbuf) > 1048576 {
+		b.sbuf = nil
 	}
 	return nil
 }
@@ -359,18 +366,17 @@ func decodeLog(buf []byte, log *raft.Log) error {
 }
 
 // Encode writes an encoded object to a new bytes buffer
-func encodeLog(log *raft.Log) []byte {
-	var buf []byte
-	var num = make([]byte, 8)
-	binary.LittleEndian.PutUint64(num, log.Index)
-	buf = append(buf, num...)
-	binary.LittleEndian.PutUint64(num, log.Term)
-	buf = append(buf, num...)
-	buf = append(buf, byte(log.Type))
-	binary.LittleEndian.PutUint64(num, uint64(len(log.Data)))
-	buf = append(buf, num...)
-	buf = append(buf, log.Data...)
-	return buf
+func appendEncodeLog(dst []byte, log *raft.Log) []byte {
+	var num [8]byte
+	binary.LittleEndian.PutUint64(num[:], log.Index)
+	dst = append(dst, num[:]...)
+	binary.LittleEndian.PutUint64(num[:], log.Term)
+	dst = append(dst, num[:]...)
+	dst = append(dst, byte(log.Type))
+	binary.LittleEndian.PutUint64(num[:], uint64(len(log.Data)))
+	dst = append(dst, num[:]...)
+	dst = append(dst, log.Data...)
+	return dst
 }
 
 // Converts bytes to an integer
@@ -383,4 +389,12 @@ func uint64ToBytes(u uint64) []byte {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, u)
 	return buf
+}
+
+// Converts a uint to a byte slice
+func appendUint64(dst []byte, u uint64) []byte {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], u)
+	dst = append(dst, buf[:]...)
+	return dst
 }
